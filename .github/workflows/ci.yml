@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          # Supply harmless values so `next build` doesn't fail if any route is
+          # pre-rendered. Runtime env is injected on Vercel.
+          TELEGRAM_BOT_TOKEN: "ci:placeholder:token"
+          TELEGRAM_WEBHOOK_SECRET: "ci-placeholder-webhook-secret-value"
+          TELEGRAM_OWNER_USER_ID: "1"
+          TELEGRAM_ALLOWED_CHAT_ID: "1"
+          GITHUB_TOKEN: "ci-placeholder-token"
+          GITHUB_REPO: "owner/repo"

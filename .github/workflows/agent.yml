@@ -1,0 +1,230 @@
+name: Claude Code Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "GitHub Issue number of the task to work on"
+        required: true
+        type: string
+      reason:
+        description: "Why this run was triggered"
+        required: false
+        type: string
+        default: "manual"
+
+# Minimum permissions needed for the agent to:
+#   - checkout + push on a feature branch     (contents: write)
+#   - comment / label the task issue          (issues:   write)
+#   - open a draft PR                         (pull-requests: write)
+# IMPORTANT: PR creation also requires the repository setting
+# "Settings → Actions → General → Workflow permissions →
+#  Allow GitHub Actions to create and approve pull requests".
+# Without it, GITHUB_TOKEN cannot open PRs and the step below will fail.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: agent-${{ github.event.inputs.task_id }}
+  cancel-in-progress: false
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TASK_ID: ${{ github.event.inputs.task_id }}
+      REASON: ${{ github.event.inputs.reason }}
+      MAX_TURNS: ${{ vars.AGENT_MAX_TURNS || '25' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Claude credentials
+        id: claude-auth
+        run: |
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "mode=api_key" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ]; then
+            echo "mode=oauth" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is configured as a repository secret."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Create working branch
+        id: branch
+        run: |
+          BRANCH="agent/task-${TASK_ID}-${{ github.run_id }}"
+          git config user.name "ai-portfolio-factory[bot]"
+          git config user.email "ai-portfolio-factory@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Mark task RUNNING
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const taskId = Number(process.env.TASK_ID);
+            const { owner, repo } = context.repo;
+            const issue = await github.rest.issues.get({ owner, repo, issue_number: taskId });
+            const labels = issue.data.labels
+              .map(l => typeof l === 'string' ? l : l.name)
+              .filter(Boolean)
+              .filter(l => !l.toLowerCase().startsWith('state:'));
+            labels.push('state:RUNNING');
+            await github.rest.issues.update({ owner, repo, issue_number: taskId, labels });
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: taskId,
+              body: `Run started: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
+            });
+
+      - name: Build Claude prompt
+        id: build-prompt
+        run: |
+          {
+            echo "prompt<<CLAUDE_EOF"
+            # Inject the task id into the template.
+            sed "s/\${TASK_ID}/${TASK_ID}/g" .github/claude/task-prompt.md
+            echo ""
+            echo "The current GitHub issue number for this task is #${TASK_ID}."
+            echo "The working branch has already been created and checked out."
+            echo "Commit changes with git. Do NOT push; the surrounding workflow handles the push and PR."
+            echo "CLAUDE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------
+      # Claude Code execution (anthropics/claude-code-action@v1).
+      # Verified inputs against the action.yml in main (see docs/ARCHITECTURE.md):
+      #   - `prompt`                  (NOT `prompt_file` — that input does not exist)
+      #   - `claude_args`             (CLI passthrough; this is how --max-turns is set)
+      #   - `anthropic_api_key`       (one auth method)
+      #   - `claude_code_oauth_token` (alternative auth; only one must be set)
+      #   - `github_token`            (uses job GITHUB_TOKEN)
+      # ------------------------------------------------------------------
+      - name: Run Claude Code
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: ${{ steps.build-prompt.outputs.prompt }}
+          claude_args: "--max-turns ${{ env.MAX_TURNS }}"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run project tests (best effort)
+        id: tests
+        continue-on-error: true
+        run: |
+          if [ -f package.json ]; then
+            npm ci || npm install
+            npm run typecheck --if-present
+            npm test --if-present
+          fi
+
+      - name: Commit and push
+        id: commit
+        continue-on-error: true
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "agent(task-${TASK_ID}): autonomous progress"
+            git push origin "${{ steps.branch.outputs.name }}"
+            echo "no_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open pull request
+        if: steps.commit.outputs.no_changes != 'true'
+        id: pr
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const taskId = Number(process.env.TASK_ID);
+            const branch = '${{ steps.branch.outputs.name }}';
+            try {
+              const pr = await github.rest.pulls.create({
+                owner, repo,
+                head: branch,
+                base: '${{ github.event.repository.default_branch }}',
+                title: `agent: task #${taskId}`,
+                body: [
+                  `Automated work for task #${taskId}.`,
+                  '',
+                  `Run: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`,
+                  '',
+                  'This pull request MUST be reviewed by a human before merge.'
+                ].join('\n'),
+                draft: true
+              });
+              core.setOutput('url', pr.data.html_url);
+              core.setOutput('number', pr.data.number);
+            } catch (err) {
+              core.warning(`Could not create PR automatically: ${err.message}`);
+              core.warning('If this is a "GitHub Actions is not permitted to create or approve pull requests" error, enable the setting in Repository → Settings → Actions → General → Workflow permissions.');
+              const url = `https://github.com/${owner}/${repo}/compare/${branch}?quick_pull=1`;
+              core.setOutput('url', url);
+            }
+
+      - name: Final status comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const taskId = Number(process.env.TASK_ID);
+            const { owner, repo } = context.repo;
+            const claudeOk = '${{ steps.claude.outcome }}' === 'success';
+            const testsOk = '${{ steps.tests.outcome }}' === 'success';
+            const noChanges = '${{ steps.commit.outputs.no_changes }}' === 'true';
+            let nextState;
+            if (!claudeOk) nextState = 'FAILED';
+            else if (noChanges) nextState = 'BLOCKED';
+            else nextState = 'IN_REVIEW';
+            const issue = await github.rest.issues.get({ owner, repo, issue_number: taskId });
+            const labels = issue.data.labels
+              .map(l => typeof l === 'string' ? l : l.name)
+              .filter(Boolean)
+              .filter(l => !l.toLowerCase().startsWith('state:'));
+            labels.push('state:' + nextState);
+            await github.rest.issues.update({ owner, repo, issue_number: taskId, labels });
+            const prUrl = '${{ steps.pr.outputs.url }}' || '(no PR)';
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: taskId,
+              body: [
+                '## Agent run report',
+                '',
+                `- Claude step: ${claudeOk ? '✅' : '❌'}`,
+                `- Tests: ${testsOk ? '✅' : '❌'}`,
+                `- Changes committed: ${noChanges ? 'none' : 'yes'}`,
+                `- Next state: **${nextState}**`,
+                `- PR: ${prUrl}`,
+                `- Run: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
+              ].join('\n')
+            });
+
+      - name: Notify Telegram
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_CHAT_ID }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: node scripts/notify-telegram.mjs

@@ -1,0 +1,76 @@
+name: Daily Agent Scheduler
+
+on:
+  schedule:
+    # 08:15 America/Bogota (UTC-5) == 13:15 UTC.
+    # The schedule only runs when repository variable DAILY_ENABLED == "true".
+    - cron: "15 13 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  pick-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Hard gate: the scheduler is OFF by default until the first end-to-end
+    # test succeeds. To enable it, set repository variable DAILY_ENABLED=true
+    # (Settings → Secrets and variables → Actions → Variables).
+    # workflow_dispatch always runs so you can test the picker manually.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.DAILY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick next approved task and dispatch agent
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            // Respect manual pause via a repo-wide label on any open issue titled
+            // "agent:paused" OR a repository label named "agent:paused" applied to
+            // a sentinel issue. Simplest MVP check: look for an open issue
+            // whose title is exactly "agent:paused".
+            const paused = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "agent:paused"`
+            });
+            if (paused.data.total_count > 0) {
+              core.notice('Agent is paused. Skipping dispatch.');
+              return;
+            }
+            // Priority order: BLOCKED > FAILED (retry once) > APPROVED > QUEUED
+            const priorityStates = ['state:BLOCKED', 'state:FAILED', 'state:APPROVED', 'state:QUEUED'];
+            let chosen = null;
+            for (const label of priorityStates) {
+              const res = await github.rest.issues.listForRepo({
+                owner, repo, state: 'open',
+                labels: `ai-portfolio-factory,${label}`,
+                per_page: 20
+              });
+              const sorted = res.data
+                .filter(i => !i.pull_request)
+                .sort((a, b) => {
+                  const pr = l => {
+                    const ls = l.labels.map(x => typeof x === 'string' ? x : x.name || '');
+                    if (ls.includes('priority:high')) return 0;
+                    if (ls.includes('priority:normal')) return 1;
+                    return 2;
+                  };
+                  return pr(a) - pr(b);
+                });
+              if (sorted.length) { chosen = sorted[0]; break; }
+            }
+            if (!chosen) {
+              core.notice('No eligible tasks found for today.');
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'agent.yml',
+              ref: context.ref.replace('refs/heads/', ''),
+              inputs: { task_id: String(chosen.number), reason: 'daily-schedule' }
+            });
+            core.notice(`Dispatched agent for task #${chosen.number}: ${chosen.title}`);
