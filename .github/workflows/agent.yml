@@ -118,7 +118,15 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           prompt: ${{ steps.build-prompt.outputs.prompt }}
-          claude_args: "--max-turns ${{ env.MAX_TURNS }}"
+          # Explicit allowed tools: Claude Code otherwise blocks on interactive
+          # confirmation for every Write/Edit/Bash call, which cannot be
+          # answered in a headless workflow run. We whitelist only what the
+          # task-prompt actually needs: filesystem edits, read/search, and the
+          # shell commands required to install deps and run tests.
+          # If Claude needs anything outside this list it will still block.
+          claude_args: >-
+            --max-turns ${{ env.MAX_TURNS }}
+            --allowedTools Read Write Edit Glob Grep Bash
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
