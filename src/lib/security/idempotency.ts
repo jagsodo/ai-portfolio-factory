@@ -48,16 +48,17 @@ class UpstashRedisStore implements IdempotencyStore {
   ) {}
 
   async claim(key: string): Promise<boolean> {
-    // Upstash REST: /set/<key>/<value>?NX=true&EX=<seconds>
+    // Upstash REST uses path segments for args: SET key value NX EX <seconds>
     // Returns { result: "OK" } on first write, { result: null } on duplicate.
     const encodedKey = encodeURIComponent(key);
-    const url = `${this.url}/set/${encodedKey}/1?NX=true&EX=${this.ttlSeconds}`;
+    const url = `${this.url}/set/${encodedKey}/1/NX/EX/${this.ttlSeconds}`;
     const res = await fetch(url, {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}` }
     });
     if (!res.ok) {
-      throw new Error(`Upstash SET NX failed: ${res.status}`);
+      const bodyText = await res.text().catch(() => "");
+      throw new Error(`Upstash SET NX failed: ${res.status} ${bodyText.slice(0, 120)}`);
     }
     const data = (await res.json()) as { result: string | null };
     return data.result === "OK";
@@ -75,8 +76,9 @@ function cleanEnvValue(raw: string | undefined): string {
 
 export function getIdempotencyStore(): IdempotencyStore {
   if (cached) return cached;
-  const backend = (process.env.IDEMPOTENCY_BACKEND ?? "memory").toLowerCase().trim();
-  if (backend === "redis") {
+  const backend = cleanEnvValue(process.env.IDEMPOTENCY_BACKEND) || "memory";
+  const normalizedBackend = backend.toLowerCase();
+  if (normalizedBackend === "redis") {
     const url = cleanEnvValue(process.env.UPSTASH_REDIS_REST_URL);
     const token = cleanEnvValue(process.env.UPSTASH_REDIS_REST_TOKEN);
     if (!url || !token) {
