@@ -66,16 +66,26 @@ class UpstashRedisStore implements IdempotencyStore {
 
 let cached: IdempotencyStore | null = null;
 
+function cleanEnvValue(raw: string | undefined): string {
+  if (!raw) return "";
+  // Vercel's "copy from Upstash" sometimes brings surrounding quotes or trailing
+  // whitespace. Strip them so one accidental Ctrl+V doesn't break the store.
+  return raw.trim().replace(/^["']|["']$/g, "").trim();
+}
+
 export function getIdempotencyStore(): IdempotencyStore {
   if (cached) return cached;
-  const backend = (process.env.IDEMPOTENCY_BACKEND ?? "memory").toLowerCase();
+  const backend = (process.env.IDEMPOTENCY_BACKEND ?? "memory").toLowerCase().trim();
   if (backend === "redis") {
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    const url = cleanEnvValue(process.env.UPSTASH_REDIS_REST_URL);
+    const token = cleanEnvValue(process.env.UPSTASH_REDIS_REST_TOKEN);
     if (!url || !token) {
       throw new Error(
-        "IDEMPOTENCY_BACKEND=redis but UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN are not set."
+        `IDEMPOTENCY_BACKEND=redis but UPSTASH_REDIS_REST_URL (${url ? "set" : "MISSING"}) / UPSTASH_REDIS_REST_TOKEN (${token ? "set" : "MISSING"}) are not usable.`
       );
+    }
+    if (!/^https:\/\//.test(url)) {
+      throw new Error(`UPSTASH_REDIS_REST_URL does not look like an https URL (got ${url.length} chars starting with "${url.slice(0, 10)}").`);
     }
     cached = new UpstashRedisStore(url, token);
   } else {

@@ -51,8 +51,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (err) {
     // Fail closed: if the dedupe backend is unreachable we return 500 so
     // Telegram retries later rather than risking a duplicate execution.
-    console.error("[telegram] idempotency backend error:", (err as Error).message);
-    return NextResponse.json({ ok: false, error: "idempotency-unavailable" }, { status: 500 });
+    const message = (err as Error).message;
+    console.error("[telegram] idempotency backend error:", message);
+    return NextResponse.json({ ok: false, error: "idempotency-unavailable", detail: message }, { status: 500 });
   }
 
   const telegram = createTelegramClient(env);
