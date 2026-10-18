@@ -145,11 +145,20 @@ jobs:
         id: commit
         continue-on-error: true
         run: |
+          # Stage anything Claude left in the working tree
           git add -A
-          if git diff --cached --quiet; then
+          # Only create our own commit if there is something to commit.
+          # Claude may have already committed inside its own session.
+          if ! git diff --cached --quiet; then
+            git commit -m "agent(task-${TASK_ID}): autonomous progress"
+          fi
+          # Decide "no changes" based on whether this branch is ahead of main,
+          # not on the stage — Claude's own commits also count.
+          AHEAD=$(git rev-list --count "origin/${{ github.event.repository.default_branch }}..HEAD")
+          echo "commits ahead of default branch: $AHEAD"
+          if [ "$AHEAD" = "0" ]; then
             echo "no_changes=true" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "agent(task-${TASK_ID}): autonomous progress"
             git push origin "${{ steps.branch.outputs.name }}"
             echo "no_changes=false" >> "$GITHUB_OUTPUT"
           fi
