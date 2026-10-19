@@ -148,4 +148,65 @@ export class TaskService {
       body: body.slice(0, 60_000)
     });
   }
+
+  /**
+   * Finds the newest open PR whose head branch matches `agent/task-<id>-*`.
+   * Returns null when there is no such PR.
+   */
+  async findAgentPrForTask(id: number): Promise<{
+    number: number;
+    htmlUrl: string;
+    headSha: string;
+    headBranch: string;
+    state: "open" | "closed";
+    merged: boolean;
+  } | null> {
+    const prefix = `agent/task-${id}-`;
+    const res = await this.deps.octokit.pulls.list({
+      owner: this.deps.owner,
+      repo: this.deps.repo,
+      state: "open",
+      per_page: 50,
+      sort: "created",
+      direction: "desc"
+    });
+    const match = res.data.find((p) => p.head.ref.startsWith(prefix));
+    if (!match) return null;
+    return {
+      number: match.number,
+      htmlUrl: match.html_url,
+      headSha: match.head.sha,
+      headBranch: match.head.ref,
+      state: match.state as "open" | "closed",
+      merged: Boolean(match.merged_at)
+    };
+  }
+
+  /** Returns the combined CI status for a commit: success/pending/failure/none. */
+  async checksStatus(sha: string): Promise<"success" | "pending" | "failure" | "none"> {
+    const res = await this.deps.octokit.checks.listForRef({
+      owner: this.deps.owner,
+      repo: this.deps.repo,
+      ref: sha,
+      per_page: 100
+    });
+    const runs = res.data.check_runs;
+    if (!runs.length) return "none";
+    if (runs.some((r) => r.status !== "completed")) return "pending";
+    if (runs.some((r) => r.conclusion && !["success", "neutral", "skipped"].includes(r.conclusion))) {
+      return "failure";
+    }
+    return "success";
+  }
+
+  async squashMergePr(prNumber: number, commitTitle: string, commitMessage: string): Promise<void> {
+    await this.deps.octokit.pulls.merge({
+      owner: this.deps.owner,
+      repo: this.deps.repo,
+      pull_number: prNumber,
+      merge_method: "squash",
+      commit_title: commitTitle.slice(0, 72),
+      commit_message: commitMessage.slice(0, 2000)
+    });
+  }
 }
