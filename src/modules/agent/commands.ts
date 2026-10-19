@@ -2,6 +2,12 @@ import type { TaskService } from "@/modules/tasks/service";
 import type { AgentDispatcher } from "@/modules/agent/dispatcher";
 import type { TelegramApi, InlineKeyboardButton } from "@/lib/telegram/client";
 import type { TaskRecord } from "@/modules/tasks/service";
+import type { GeminiClient } from "@/lib/gemini/client";
+import {
+  refineTaskSpec,
+  wrapDraft,
+  extractLatestDraft
+} from "@/modules/agent/refine";
 
 export interface CommandContext {
   chatId: number;
@@ -9,6 +15,10 @@ export interface CommandContext {
   tasks: TaskService;
   dispatcher: AgentDispatcher;
   telegram: TelegramApi;
+  /** Optional: when present, enables /discutir and /aceptar. */
+  gemini?: GeminiClient | null;
+  /** GitHub login used as "owner" in the refinement thread. Falls back to "owner". */
+  ownerLogin?: string;
 }
 
 export interface ParsedCommand {
@@ -42,6 +52,9 @@ export function helpText(): string {
     "/help — Esta ayuda",
     "/ideas — Pedir propuestas de proyecto",
     "/nuevo <descripción> — Registrar una idea de software",
+    "/ver <id> — Ver el estado y descripción de una tarea",
+    "/discutir <id> <mensaje> — Refinar la spec de la tarea con el asistente",
+    "/aceptar <id> — Aplicar la última propuesta al cuerpo del issue",
     "/proyectos — Listar proyectos registrados",
     "/estado — Ver tareas en curso",
     "/pendientes — Tareas que requieren intervención",
@@ -52,7 +65,7 @@ export function helpText(): string {
     "/prioridad <id> <low|normal|high> — Cambiar prioridad",
     "/pausar — Pausar la asignación de tareas",
     "/reanudar — Reactivar la asignación",
-    "/publicar <id> — Solicitar publicación (requiere revisión manual)"
+    "/publicar <id> — Mergear el PR del agente tras CI verde"
   ].join("\n");
 }
 
@@ -341,6 +354,117 @@ async function cmdPublicar(ctx: CommandContext, args: string): Promise<void> {
   });
 }
 
+async function cmdVer(ctx: CommandContext, args: string): Promise<void> {
+  const id = Number(args.trim());
+  if (!Number.isInteger(id) || id <= 0) {
+    await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: "Uso: /ver <id>" });
+    return;
+  }
+  const task = await ctx.tasks.getTask(id);
+  if (!task) {
+    await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: `Tarea #${id} no existe.` });
+    return;
+  }
+  const body = task.body.trim() ? task.body : "(sin descripción)";
+  const txt = [
+    `#${task.id} — ${task.title}`,
+    `Estado: ${task.state} · prioridad ${task.priority}`,
+    task.project ? `Proyecto: ${task.project}` : null,
+    "",
+    body.slice(0, 3500),
+    "",
+    task.htmlUrl
+  ]
+    .filter(Boolean)
+    .join("\n");
+  await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: txt });
+}
+
+async function cmdDiscutir(ctx: CommandContext, args: string): Promise<void> {
+  if (!ctx.gemini) {
+    await ctx.telegram.sendMessage({
+      chatId: ctx.chatId,
+      text: "El asistente de refinamiento no está configurado (falta GEMINI_API_KEY)."
+    });
+    return;
+  }
+  const sep = args.search(/\s/);
+  const idPart = sep === -1 ? args : args.slice(0, sep);
+  const message = sep === -1 ? "" : args.slice(sep + 1).trim();
+  const id = Number(idPart);
+  if (!Number.isInteger(id) || id <= 0 || !message) {
+    await ctx.telegram.sendMessage({
+      chatId: ctx.chatId,
+      text: "Uso: /discutir <id> <mensaje o pregunta>"
+    });
+    return;
+  }
+  const task = await ctx.tasks.getTask(id);
+  if (!task) {
+    await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: `Tarea #${id} no existe.` });
+    return;
+  }
+  const result = await refineTaskSpec({
+    gemini: ctx.gemini,
+    tasks: ctx.tasks,
+    task,
+    ownerLogin: ctx.ownerLogin ?? "owner",
+    userMessage: message
+  });
+
+  // Persist the owner's message + the model's reply + an optional draft.
+  const commentParts = [
+    `**/discutir** (owner): ${message}`,
+    "",
+    `**Gemini:** ${result.reply || "(sin respuesta)"}`
+  ];
+  if (result.proposalBody) commentParts.push("", wrapDraft(result.proposalBody));
+  await ctx.tasks.addComment(id, commentParts.join("\n"));
+
+  const telegramParts = [
+    result.reply || "(respuesta vacía)",
+    "",
+    result.proposalBody
+      ? `Propuesta guardada. Ejecuta /aceptar ${id} para aplicarla, o /discutir ${id} <más indicaciones>.`
+      : `Sin propuesta de cambio. Vuelve a /discutir ${id} <más indicaciones>.`
+  ];
+  await ctx.telegram.sendMessage({
+    chatId: ctx.chatId,
+    text: telegramParts.join("\n")
+  });
+}
+
+async function cmdAceptar(ctx: CommandContext, args: string): Promise<void> {
+  const id = Number(args.trim());
+  if (!Number.isInteger(id) || id <= 0) {
+    await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: "Uso: /aceptar <id>" });
+    return;
+  }
+  const task = await ctx.tasks.getTask(id);
+  if (!task) {
+    await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: `Tarea #${id} no existe.` });
+    return;
+  }
+  const comments = await ctx.tasks.listComments(id, 20);
+  const draft = extractLatestDraft(comments);
+  if (!draft) {
+    await ctx.telegram.sendMessage({
+      chatId: ctx.chatId,
+      text: `No hay propuesta pendiente en #${id}. Usa /discutir ${id} <...> primero.`
+    });
+    return;
+  }
+  await ctx.tasks.updateBody(id, draft);
+  await ctx.tasks.addComment(
+    id,
+    `Propietario aceptó la última propuesta como nuevo spec del issue.`
+  );
+  await ctx.telegram.sendMessage({
+    chatId: ctx.chatId,
+    text: `Spec actualizado en #${id}. Puedes /aprobar ${id} y luego /iniciar ${id} cuando esté listo.`
+  });
+}
+
 export async function handleCommand(ctx: CommandContext, text: string): Promise<void> {
   const parsed = parseCommand(text);
   if (!parsed) {
@@ -361,6 +485,15 @@ export async function handleCommand(ctx: CommandContext, text: string): Promise<
       return;
     case "nuevo":
       await cmdNuevo(ctx, parsed.args);
+      return;
+    case "ver":
+      await cmdVer(ctx, parsed.args);
+      return;
+    case "discutir":
+      await cmdDiscutir(ctx, parsed.args);
+      return;
+    case "aceptar":
+      await cmdAceptar(ctx, parsed.args);
       return;
     case "ideas":
       await cmdIdeas(ctx);

@@ -12,6 +12,8 @@ const EnvSchema = z.object({
   GITHUB_DEFAULT_BRANCH: z.string().default("main"),
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   CLAUDE_CODE_OAUTH_TOKEN: z.string().optional().default(""),
+  GEMINI_API_KEY: z.string().optional().default(""),
+  GEMINI_MODEL: z.string().optional().default("gemini-flash-latest"),
   AGENT_MAX_TURNS: z.coerce.number().int().positive().default(25),
   AGENT_DAILY_LIMIT: z.coerce.number().int().positive().default(1)
 });

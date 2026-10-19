@@ -149,6 +149,34 @@ export class TaskService {
     });
   }
 
+  async listComments(id: number, limit = 20): Promise<Array<{ author: string; body: string; createdAt: string }>> {
+    const res = await this.deps.octokit.issues.listComments({
+      owner: this.deps.owner,
+      repo: this.deps.repo,
+      issue_number: id,
+      per_page: limit,
+      sort: "created",
+      direction: "desc"
+    });
+    return res.data
+      .slice(0, limit)
+      .reverse()
+      .map((c) => ({
+        author: c.user?.login ?? "unknown",
+        body: c.body ?? "",
+        createdAt: c.created_at
+      }));
+  }
+
+  async updateBody(id: number, body: string): Promise<void> {
+    await this.deps.octokit.issues.update({
+      owner: this.deps.owner,
+      repo: this.deps.repo,
+      issue_number: id,
+      body: body.slice(0, 60_000)
+    });
+  }
+
   /**
    * Finds the newest open PR whose head branch matches `agent/task-<id>-*`.
    * Returns null when there is no such PR.

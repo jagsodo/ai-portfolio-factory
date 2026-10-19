@@ -11,6 +11,7 @@ import {
   getIdempotencyStore,
   telegramUpdateKey
 } from "@/lib/security/idempotency";
+import { createGeminiClient } from "@/lib/gemini/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,6 +62,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const { owner, repo } = getRepoParts(env);
   const tasks = new TaskService({ octokit, owner, repo });
   const dispatcher = new AgentDispatcher({ octokit, owner, repo, ref: env.GITHUB_DEFAULT_BRANCH });
+  const gemini = env.GEMINI_API_KEY
+    ? createGeminiClient(env.GEMINI_API_KEY, env.GEMINI_MODEL)
+    : null;
 
   try {
     if (update.message) {
@@ -72,7 +76,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       assertAllowedIdentity({ userId: from.id, chatId: msg.chat.id }, env);
       const text = msg.text ?? "";
       await handleCommand(
-        { chatId: msg.chat.id, userId: from.id, tasks, dispatcher, telegram },
+        {
+          chatId: msg.chat.id,
+          userId: from.id,
+          tasks,
+          dispatcher,
+          telegram,
+          gemini,
+          ownerLogin: owner
+        },
         text
       );
     } else if (update.callback_query) {
@@ -80,7 +92,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const chatId = cq.message?.chat.id ?? cq.from.id;
       assertAllowedIdentity({ userId: cq.from.id, chatId }, env);
       await handleCallback(
-        { chatId, userId: cq.from.id, tasks, dispatcher, telegram },
+        { chatId, userId: cq.from.id, tasks, dispatcher, telegram, gemini, ownerLogin: owner },
         cq.data ?? "",
         cq.id
       );
