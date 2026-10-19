@@ -12,6 +12,8 @@ const env: AppEnv = {
   GITHUB_DEFAULT_BRANCH: "main",
   ANTHROPIC_API_KEY: "",
   CLAUDE_CODE_OAUTH_TOKEN: "",
+  GEMINI_API_KEY: "",
+  GEMINI_MODEL: "gemini-flash-latest",
   AGENT_MAX_TURNS: 25,
   AGENT_DAILY_LIMIT: 1
 };
