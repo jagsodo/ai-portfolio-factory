@@ -185,9 +185,11 @@ jobs:
                   '',
                   `Run: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`,
                   '',
-                  'This pull request MUST be reviewed by a human before merge.'
+                  'This pull request MUST be reviewed by a human before merge.',
+                  '',
+                  'You can also publish it from Telegram with `/publicar ' + taskId + '`.'
                 ].join('\n'),
-                draft: true
+                draft: false
               });
               core.setOutput('url', pr.data.html_url);
               core.setOutput('number', pr.data.number);

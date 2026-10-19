@@ -282,21 +282,62 @@ async function cmdPublicar(ctx: CommandContext, args: string): Promise<void> {
   const id = Number(args.trim());
   const task = Number.isInteger(id) ? await ctx.tasks.getTask(id) : null;
   if (!task) {
+    await ctx.telegram.sendMessage({ chatId: ctx.chatId, text: "Uso: /publicar <id>" });
+    return;
+  }
+
+  const pr = await ctx.tasks.findAgentPrForTask(id);
+  if (!pr) {
     await ctx.telegram.sendMessage({
       chatId: ctx.chatId,
-      text: "Uso: /publicar <id>. La publicación requiere merge manual del Pull Request en GitHub."
+      text: `No encuentro un Pull Request abierto para la tarea #${id}.`
     });
     return;
   }
+
+  const status = await ctx.tasks.checksStatus(pr.headSha);
+  if (status === "pending") {
+    await ctx.telegram.sendMessage({
+      chatId: ctx.chatId,
+      text: `CI del PR #${pr.number} aún corriendo. Reintenta /publicar ${id} en un minuto.\n${pr.htmlUrl}`
+    });
+    return;
+  }
+  if (status === "failure") {
+    await ctx.telegram.sendMessage({
+      chatId: ctx.chatId,
+      text:
+        `No puedo publicar: el CI del PR #${pr.number} está en failure. Revisa la ejecución antes de reintentar.\n${pr.htmlUrl}`
+    });
+    return;
+  }
+
   await ctx.tasks.addComment(
     id,
-    `Publicación solicitada por el propietario (Telegram user ${ctx.userId}).\n` +
-      "Esta aprobación NO sustituye la revisión y el merge del Pull Request en GitHub."
+    `Publicación aprobada por el propietario (Telegram user ${ctx.userId}). Mergeando PR #${pr.number} con squash.`
   );
+
+  try {
+    await ctx.tasks.squashMergePr(
+      pr.number,
+      `agent(task-${id}): ${task.title}`.slice(0, 72),
+      `Approved and merged via Telegram by owner.\n\nTask: #${id}\nPR: #${pr.number}`
+    );
+  } catch (err) {
+    const msg = (err as Error).message;
+    await ctx.telegram.sendMessage({
+      chatId: ctx.chatId,
+      text:
+        `No pude mergear el PR #${pr.number} automáticamente: ${msg}\n` +
+        `Puedes mergearlo tú en: ${pr.htmlUrl}`
+    });
+    return;
+  }
+
+  await ctx.tasks.setState(id, "PUBLISHED", `Mergeado automáticamente tras /publicar desde Telegram.`);
   await ctx.telegram.sendMessage({
     chatId: ctx.chatId,
-    text:
-      `Solicitud registrada en #${id}. Revisa y mergea el Pull Request manualmente para publicar.\n${task.htmlUrl}`
+    text: `Publicado ✅ PR #${pr.number} mergeado. Tarea #${id} → PUBLISHED.\n${pr.htmlUrl}`
   });
 }
 

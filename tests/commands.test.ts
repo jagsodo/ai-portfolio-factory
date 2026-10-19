@@ -16,13 +16,15 @@ describe("parseCommand", () => {
   });
 });
 
-function buildCtx(overrides: Partial<{ task: TaskRecord | null }> = {}) {
+function buildCtx(overrides: Partial<{ task: TaskRecord | null; pr: unknown; checks: string }> = {}) {
   const sent: Array<{ text: string }> = [];
   const task: TaskRecord | null = overrides.task === undefined ? null : overrides.task;
   const createdTasks: unknown[] = [];
+  const merged: Array<{ pr: number }> = [];
   return {
     sent,
     createdTasks,
+    merged,
     ctx: {
       chatId: 42,
       userId: 42,
@@ -51,7 +53,12 @@ function buildCtx(overrides: Partial<{ task: TaskRecord | null }> = {}) {
         getTask: vi.fn(async () => task),
         listOpenTasks: vi.fn(async () => (task ? [task] : [])),
         setState: vi.fn(async () => task as TaskRecord),
-        addComment: vi.fn(async () => {})
+        addComment: vi.fn(async () => {}),
+        findAgentPrForTask: vi.fn(async () => overrides.pr ?? null),
+        checksStatus: vi.fn(async () => overrides.checks ?? "success"),
+        squashMergePr: vi.fn(async (prNumber: number) => {
+          merged.push({ pr: prNumber });
+        })
       },
       dispatcher: { dispatch: vi.fn(async () => {}) }
     }
@@ -95,5 +102,61 @@ describe("handleCommand", () => {
     const { ctx, sent } = buildCtx();
     await handleCommand(ctx as never, "hola");
     expect(sent.at(-1)?.text.toLowerCase()).toContain("idea");
+  });
+
+  it("/publicar refuses if there is no PR for the task", async () => {
+    const task: TaskRecord = {
+      id: 7,
+      title: "x",
+      body: "",
+      state: "IN_REVIEW",
+      priority: "normal",
+      project: null,
+      labels: [],
+      htmlUrl: "u",
+      updatedAt: ""
+    };
+    const { ctx, sent, merged } = buildCtx({ task, pr: null });
+    await handleCommand(ctx as never, "/publicar 7");
+    expect(merged).toHaveLength(0);
+    expect(sent.at(-1)?.text).toContain("No encuentro");
+  });
+
+  it("/publicar waits when CI is pending", async () => {
+    const task: TaskRecord = {
+      id: 7,
+      title: "x",
+      body: "",
+      state: "IN_REVIEW",
+      priority: "normal",
+      project: null,
+      labels: [],
+      htmlUrl: "u",
+      updatedAt: ""
+    };
+    const pr = { number: 11, htmlUrl: "pru", headSha: "sha", headBranch: "b", state: "open", merged: false };
+    const { ctx, sent, merged } = buildCtx({ task, pr, checks: "pending" });
+    await handleCommand(ctx as never, "/publicar 7");
+    expect(merged).toHaveLength(0);
+    expect(sent.at(-1)?.text).toMatch(/corriendo|pending/i);
+  });
+
+  it("/publicar merges when CI is green", async () => {
+    const task: TaskRecord = {
+      id: 7,
+      title: "x",
+      body: "",
+      state: "IN_REVIEW",
+      priority: "normal",
+      project: null,
+      labels: [],
+      htmlUrl: "u",
+      updatedAt: ""
+    };
+    const pr = { number: 11, htmlUrl: "pru", headSha: "sha", headBranch: "b", state: "open", merged: false };
+    const { ctx, sent, merged } = buildCtx({ task, pr, checks: "success" });
+    await handleCommand(ctx as never, "/publicar 7");
+    expect(merged).toEqual([{ pr: 11 }]);
+    expect(sent.at(-1)?.text).toContain("Publicado");
   });
 });
