@@ -1,0 +1,122 @@
+[
+  {
+    "id": "INV-001",
+    "client": "Andina Textiles SAS",
+    "description": "Servicio ficticio #1",
+    "amount": 470000,
+    "currency": "COP",
+    "issueDate": "2026-01-05",
+    "dueDate": "2026-01-20",
+    "status": "paid"
+  },
+  {
+    "id": "INV-002",
+    "client": "Logística Caribe SAS",
+    "description": "Servicio ficticio #2",
+    "amount": 820000,
+    "currency": "COP",
+    "issueDate": "2026-02-05",
+    "dueDate": "2026-02-20",
+    "status": "paid"
+  },
+  {
+    "id": "INV-003",
+    "client": "Constructora Bogotá",
+    "description": "Servicio ficticio #3",
+    "amount": 1170000,
+    "currency": "COP",
+    "issueDate": "2026-03-05",
+    "dueDate": "2026-03-20",
+    "status": "paid"
+  },
+  {
+    "id": "INV-004",
+    "client": "Café del Valle Ltda",
+    "description": "Servicio ficticio #4",
+    "amount": 1520000,
+    "currency": "COP",
+    "issueDate": "2026-04-05",
+    "dueDate": "2026-04-20",
+    "status": "paid"
+  },
+  {
+    "id": "INV-005",
+    "client": "Andina Textiles SAS",
+    "description": "Servicio ficticio #5",
+    "amount": 1870000,
+    "currency": "COP",
+    "issueDate": "2026-10-01",
+    "dueDate": "2026-11-01",
+    "status": "pending"
+  },
+  {
+    "id": "INV-006",
+    "client": "Logística Caribe SAS",
+    "description": "Servicio ficticio #6",
+    "amount": 2220000,
+    "currency": "COP",
+    "issueDate": "2026-10-02",
+    "dueDate": "2026-11-02",
+    "status": "pending"
+  },
+  {
+    "id": "INV-007",
+    "client": "Constructora Bogotá",
+    "description": "Servicio ficticio #7",
+    "amount": 2570000,
+    "currency": "COP",
+    "issueDate": "2026-10-03",
+    "dueDate": "2026-11-03",
+    "status": "pending"
+  },
+  {
+    "id": "INV-008",
+    "client": "Café del Valle Ltda",
+    "description": "Servicio ficticio #8",
+    "amount": 2920000,
+    "currency": "COP",
+    "issueDate": "2026-10-04",
+    "dueDate": "2026-11-04",
+    "status": "pending"
+  },
+  {
+    "id": "INV-009",
+    "client": "Andina Textiles SAS",
+    "description": "Servicio ficticio #9",
+    "amount": 3270000,
+    "currency": "COP",
+    "issueDate": "2026-05-10",
+    "dueDate": "2026-05-25",
+    "status": "overdue"
+  },
+  {
+    "id": "INV-010",
+    "client": "Logística Caribe SAS",
+    "description": "Servicio ficticio #10",
+    "amount": 3620000,
+    "currency": "COP",
+    "issueDate": "2026-06-10",
+    "dueDate": "2026-06-25",
+    "status": "overdue"
+  },
+  {
+    "id": "INV-011",
+    "client": "Constructora Bogotá",
+    "description": "Servicio ficticio #11",
+    "amount": 3970000,
+    "currency": "COP",
+    "issueDate": "2026-07-10",
+    "dueDate": "2026-07-25",
+    "status": "overdue"
+  },
+  {
+    "id": "INV-012",
+    "client": "Café del Valle Ltda",
+    "description": "Servicio ficticio #12",
+    "amount": 4320000,
+    "currency": "COP",
+    "issueDate": "2026-08-10",
+    "dueDate": "2026-08-25",
+    "status": "overdue"
+  }
+]
